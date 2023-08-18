@@ -1,5 +1,5 @@
 use crate::config::{async_del_zset_threshold_or_default, async_expire_zset_threshold_or_default};
-use crate::db::DBInner;
+
 use crate::rocks::client::{get_version_for_new, RocksClient};
 use crate::rocks::encoding::{DataType, KeyDecoder};
 use crate::rocks::errors::{REDIS_VALUE_IS_NOT_VALID_FLOAT_ERR, REDIS_WRONG_TYPE_ERR};
@@ -15,6 +15,8 @@ use crate::utils::{key_is_expired, resp_array, resp_bulk, resp_err, resp_int, re
 use crate::Frame;
 use rocksdb::ColumnFamilyRef;
 use std::collections::HashMap;
+
+use super::encoding::KeyEncoder;
 
 pub struct ZsetCF<'a> {
     meta_cf: ColumnFamilyRef<'a>,
@@ -39,12 +41,12 @@ impl<'a> ZsetCF<'a> {
 }
 
 pub struct ZsetCommand<'a> {
-    inner_db: &'a DBInner,
+    client: &'a RocksClient,
 }
 
 impl<'a> ZsetCommand<'a> {
-    pub fn new(inner_db: &'a DBInner) -> Self {
-        Self { inner_db }
+    pub fn new(client: &'a RocksClient) -> Self {
+        Self { client }
     }
 
     pub async fn zadd(
@@ -56,13 +58,13 @@ impl<'a> ZsetCommand<'a> {
         changed_only: bool,
         _incr: bool,
     ) -> RocksResult<Frame> {
-        let client = &self.inner_db.client;
+        let client = self.client;
         let cfs = ZsetCF::new(client);
         let key = key.to_owned();
         let members = members.to_owned();
         let scores = scores.to_owned();
-        let meta_key = self.inner_db.key_encoder.encode_meta_key(&key);
-        let rand_idx = self.inner_db.gen_next_meta_index();
+        let meta_key = KeyEncoder::encode_meta_key(&key);
+        let rand_idx = self.client.gen_next_meta_index();
 
         let resp = client.exec_txn(|txn| {
             match txn.get(cfs.meta_cf.clone(), meta_key.clone())? {
@@ -74,10 +76,7 @@ impl<'a> ZsetCommand<'a> {
 
                     let (ttl, mut version, _) = KeyDecoder::decode_key_meta(&meta_value);
 
-                    let sub_meta_key = self
-                        .inner_db
-                        .key_encoder
-                        .encode_sub_meta_key(&key, version, rand_idx);
+                    let sub_meta_key = KeyEncoder::encode_sub_meta_key(&key, version, rand_idx);
                     let sub_meta_value_res =
                         txn.get(cfs.sub_meta_cf.clone(), sub_meta_key.clone())?;
 
@@ -90,7 +89,6 @@ impl<'a> ZsetCommand<'a> {
                             cfs.gc_cf.clone(),
                             cfs.gc_version_cf.clone(),
                             &key,
-                            &self.inner_db.key_encoder,
                         )?;
                     }
 
@@ -99,11 +97,7 @@ impl<'a> ZsetCommand<'a> {
 
                     let data_keys: Vec<Key> = members
                         .iter()
-                        .map(|member| {
-                            self.inner_db
-                                .key_encoder
-                                .encode_zset_data_key(&key, member, version)
-                        })
+                        .map(|member| KeyEncoder::encode_zset_data_key(&key, member, version))
                         .collect();
                     let data_map: HashMap<Key, Value> = txn
                         .batch_get_for_update(cfs.data_cf.clone(), data_keys)?
@@ -112,13 +106,10 @@ impl<'a> ZsetCommand<'a> {
                         .collect();
 
                     for idx in 0..members.len() {
-                        let data_key = self.inner_db.key_encoder.encode_zset_data_key(
-                            &key,
-                            &members[idx],
-                            version,
-                        );
+                        let data_key =
+                            KeyEncoder::encode_zset_data_key(&key, &members[idx], version);
                         let new_score = scores[idx];
-                        let score_key = self.inner_db.key_encoder.encode_zset_score_key(
+                        let score_key = KeyEncoder::encode_zset_score_key(
                             &key,
                             new_score,
                             &members[idx],
@@ -153,8 +144,7 @@ impl<'a> ZsetCommand<'a> {
                                         }
                                     }
                                 }
-                                let data_value =
-                                    self.inner_db.key_encoder.encode_zset_data_value(new_score);
+                                let data_value = KeyEncoder::encode_zset_data_value(new_score);
                                 txn.put(cfs.data_cf.clone(), data_key, data_value)?;
 
                                 // delete old score key if exists
@@ -163,13 +153,12 @@ impl<'a> ZsetCommand<'a> {
                                         &old_data_value_data,
                                     );
                                     if old_score != new_score {
-                                        let old_score_key =
-                                            self.inner_db.key_encoder.encode_zset_score_key(
-                                                &key,
-                                                old_score,
-                                                &members[idx],
-                                                version,
-                                            );
+                                        let old_score_key = KeyEncoder::encode_zset_score_key(
+                                            &key,
+                                            old_score,
+                                            &members[idx],
+                                            version,
+                                        );
                                         txn.del(cfs.score_cf.clone(), old_score_key)?;
                                     }
                                 }
@@ -193,8 +182,7 @@ impl<'a> ZsetCommand<'a> {
                                     }
                                 }
                             }
-                            let data_value =
-                                self.inner_db.key_encoder.encode_zset_data_value(new_score);
+                            let data_value = KeyEncoder::encode_zset_data_value(new_score);
                             let member = members[idx].clone();
                             txn.put(cfs.data_cf.clone(), data_key, data_value)?;
 
@@ -203,13 +191,12 @@ impl<'a> ZsetCommand<'a> {
                                 let old_score =
                                     KeyDecoder::decode_key_zset_data_value(&old_data_value_data);
                                 if old_score != new_score {
-                                    let old_score_key =
-                                        self.inner_db.key_encoder.encode_zset_score_key(
-                                            &key,
-                                            old_score,
-                                            &members[idx],
-                                            version,
-                                        );
+                                    let old_score_key = KeyEncoder::encode_zset_score_key(
+                                        &key,
+                                        old_score,
+                                        &members[idx],
+                                        version,
+                                    );
                                     txn.del(cfs.score_cf.clone(), old_score_key)?;
                                 }
                             }
@@ -235,10 +222,7 @@ impl<'a> ZsetCommand<'a> {
 
                     // add meta key if key expired above
                     if expired {
-                        let new_meta_value = self
-                            .inner_db
-                            .key_encoder
-                            .encode_zset_meta_value(ttl, version, 0);
+                        let new_meta_value = KeyEncoder::encode_zset_meta_value(ttl, version, 0);
                         txn.put(cfs.meta_cf.clone(), meta_key, new_meta_value)?;
                     }
 
@@ -254,14 +238,10 @@ impl<'a> ZsetCommand<'a> {
                         cfs.gc_cf.clone(),
                         cfs.gc_version_cf.clone(),
                         &key,
-                        &self.inner_db.key_encoder,
                     )?;
 
                     // add sub meta key
-                    let sub_meta_key = self
-                        .inner_db
-                        .key_encoder
-                        .encode_sub_meta_key(&key, version, rand_idx);
+                    let sub_meta_key = KeyEncoder::encode_sub_meta_key(&key, version, rand_idx);
                     // lock sub meta key
                     txn.get_for_update(cfs.sub_meta_cf.clone(), sub_meta_key.clone())?;
 
@@ -273,19 +253,14 @@ impl<'a> ZsetCommand<'a> {
                     }
                     // create new key
                     for idx in 0..members.len() {
-                        let data_key = self.inner_db.key_encoder.encode_zset_data_key(
-                            &key,
-                            &members[idx],
-                            version,
-                        );
+                        let data_key =
+                            KeyEncoder::encode_zset_data_key(&key, &members[idx], version);
                         let score = scores[idx];
                         let member = members[idx].clone();
-                        let score_key = self
-                            .inner_db
-                            .key_encoder
-                            .encode_zset_score_key(&key, score, &member, version);
+                        let score_key =
+                            KeyEncoder::encode_zset_score_key(&key, score, &member, version);
                         // add data key and score key
-                        let data_value = self.inner_db.key_encoder.encode_zset_data_value(score);
+                        let data_value = KeyEncoder::encode_zset_data_value(score);
                         txn.put(cfs.data_cf.clone(), data_key, data_value)?;
                         // TODO check old score key exists, in case of zadd same field with different scores?
                         txn.put(cfs.score_cf.clone(), score_key, member)?;
@@ -298,10 +273,7 @@ impl<'a> ZsetCommand<'a> {
                     )?;
                     // add meta key
                     let size = members.len() as i64;
-                    let new_meta_value = self
-                        .inner_db
-                        .key_encoder
-                        .encode_zset_meta_value(0, version, 0);
+                    let new_meta_value = KeyEncoder::encode_zset_meta_value(0, version, 0);
                     txn.put(cfs.meta_cf.clone(), meta_key, new_meta_value)?;
                     Ok(size)
                 }
@@ -315,10 +287,10 @@ impl<'a> ZsetCommand<'a> {
     }
 
     pub async fn zcard(self, key: &str) -> RocksResult<Frame> {
-        let client = &self.inner_db.client;
+        let client = self.client;
         let cfs = ZsetCF::new(client);
         let key = key.to_owned();
-        let meta_key = self.inner_db.key_encoder.encode_meta_key(&key);
+        let meta_key = KeyEncoder::encode_meta_key(&key);
 
         client.exec_txn(|txn| {
             match txn.get(cfs.meta_cf.clone(), meta_key.clone())? {
@@ -343,11 +315,11 @@ impl<'a> ZsetCommand<'a> {
     }
 
     pub async fn zscore(self, key: &str, member: &str) -> RocksResult<Frame> {
-        let client = &self.inner_db.client;
+        let client = self.client;
         let cfs = ZsetCF::new(client);
         let key = key.to_owned();
         let member = member.to_owned();
-        let meta_key = self.inner_db.key_encoder.encode_meta_key(&key);
+        let meta_key = KeyEncoder::encode_meta_key(&key);
 
         client.exec_txn(|txn| {
             match txn.get(cfs.meta_cf.clone(), meta_key.clone())? {
@@ -363,10 +335,7 @@ impl<'a> ZsetCommand<'a> {
                         return Ok(resp_nil());
                     }
 
-                    let data_key = self
-                        .inner_db
-                        .key_encoder
-                        .encode_zset_data_key(&key, &member, version);
+                    let data_key = KeyEncoder::encode_zset_data_key(&key, &member, version);
                     match txn.get(cfs.data_cf.clone(), data_key)? {
                         Some(data_value) => {
                             let score = KeyDecoder::decode_key_zset_data_value(&data_value);
@@ -388,10 +357,10 @@ impl<'a> ZsetCommand<'a> {
         max: f64,
         max_inclusive: bool,
     ) -> RocksResult<Frame> {
-        let client = &self.inner_db.client;
+        let client = self.client;
         let cfs = ZsetCF::new(client);
         let key = key.to_owned();
-        let meta_key = self.inner_db.key_encoder.encode_meta_key(&key);
+        let meta_key = KeyEncoder::encode_meta_key(&key);
 
         client.exec_txn(|txn| {
             match txn.get(cfs.meta_cf.clone(), meta_key.clone())? {
@@ -411,13 +380,13 @@ impl<'a> ZsetCommand<'a> {
                         return Ok(resp_int(0));
                     }
 
-                    let start_key = self.inner_db.key_encoder.encode_zset_score_key_score_start(
+                    let start_key = KeyEncoder::encode_zset_score_key_score_start(
                         &key,
                         min,
                         min_inclusive,
                         version,
                     );
-                    let end_key = self.inner_db.key_encoder.encode_zset_score_key_score_end(
+                    let end_key = KeyEncoder::encode_zset_score_key_score_end(
                         &key,
                         max,
                         max_inclusive,
@@ -442,10 +411,10 @@ impl<'a> ZsetCommand<'a> {
         with_scores: bool,
         reverse: bool,
     ) -> RocksResult<Frame> {
-        let client = &self.inner_db.client;
+        let client = self.client;
         let cfs = ZsetCF::new(client);
         let key = key.to_owned();
-        let meta_key = self.inner_db.key_encoder.encode_meta_key(&key);
+        let meta_key = KeyEncoder::encode_meta_key(&key);
 
         client.exec_txn(|txn| {
             let mut resp = vec![];
@@ -478,10 +447,7 @@ impl<'a> ZsetCommand<'a> {
                         max = r_max;
                     }
 
-                    let bound_range = self
-                        .inner_db
-                        .key_encoder
-                        .encode_zset_score_key_range(&key, version);
+                    let bound_range = KeyEncoder::encode_zset_score_key_range(&key, version);
                     let iter =
                         txn.scan(cfs.score_cf.clone(), bound_range, size.try_into().unwrap())?;
 
@@ -531,10 +497,10 @@ impl<'a> ZsetCommand<'a> {
         with_scores: bool,
         reverse: bool,
     ) -> RocksResult<Frame> {
-        let client = &self.inner_db.client;
+        let client = self.client;
         let cfs = ZsetCF::new(client);
         let key = key.to_owned();
-        let meta_key = self.inner_db.key_encoder.encode_meta_key(&key);
+        let meta_key = KeyEncoder::encode_meta_key(&key);
 
         client.exec_txn(|txn| {
             let mut resp = vec![];
@@ -562,13 +528,13 @@ impl<'a> ZsetCommand<'a> {
 
                     let size = self.sum_key_size(&key, version)?;
 
-                    let start_key = self.inner_db.key_encoder.encode_zset_score_key_score_start(
+                    let start_key = KeyEncoder::encode_zset_score_key_score_start(
                         &key,
                         min,
                         min_inclusive,
                         version,
                     );
-                    let end_key = self.inner_db.key_encoder.encode_zset_score_key_score_end(
+                    let end_key = KeyEncoder::encode_zset_score_key_score_end(
                         &key,
                         max,
                         max_inclusive,
@@ -604,11 +570,11 @@ impl<'a> ZsetCommand<'a> {
     }
 
     pub async fn zpop(self, key: &str, from_min: bool, count: u64) -> RocksResult<Frame> {
-        let client = &self.inner_db.client;
+        let client = self.client;
         let cfs = ZsetCF::new(client);
         let key = key.to_owned();
-        let meta_key = self.inner_db.key_encoder.encode_meta_key(&key);
-        let rand_idx = self.inner_db.gen_next_meta_index();
+        let meta_key = KeyEncoder::encode_meta_key(&key);
+        let rand_idx = self.client.gen_next_meta_index();
 
         let resp = client.exec_txn(|txn| {
             match txn.get(cfs.meta_cf.clone(), meta_key.clone())? {
@@ -626,10 +592,7 @@ impl<'a> ZsetCommand<'a> {
 
                     let mut poped_count = 0;
                     let mut resp = vec![];
-                    let bound_range = self
-                        .inner_db
-                        .key_encoder
-                        .encode_zset_score_key_range(&key, version);
+                    let bound_range = KeyEncoder::encode_zset_score_key_range(&key, version);
                     if from_min {
                         let iter = txn.scan_keys(
                             cfs.score_cf.clone(),
@@ -639,7 +602,7 @@ impl<'a> ZsetCommand<'a> {
                         for k in iter {
                             let member =
                                 KeyDecoder::decode_key_zset_member_from_scorekey(&key, k.clone());
-                            let data_key = self.inner_db.key_encoder.encode_zset_data_key(
+                            let data_key = KeyEncoder::encode_zset_data_key(
                                 &key,
                                 &String::from_utf8_lossy(&member),
                                 version,
@@ -665,7 +628,7 @@ impl<'a> ZsetCommand<'a> {
                         for k in iter {
                             let member =
                                 KeyDecoder::decode_key_zset_member_from_scorekey(&key, k.clone());
-                            let data_key = self.inner_db.key_encoder.encode_zset_data_key(
+                            let data_key = KeyEncoder::encode_zset_data_key(
                                 &key,
                                 &String::from_utf8_lossy(&member),
                                 version,
@@ -688,10 +651,7 @@ impl<'a> ZsetCommand<'a> {
 
                     // delete all sub meta keys and meta key if all members poped
                     if poped_count >= size {
-                        let bound_range = self
-                            .inner_db
-                            .key_encoder
-                            .encode_sub_meta_key_range(&key, version);
+                        let bound_range = KeyEncoder::encode_sub_meta_key_range(&key, version);
                         let iter = txn.scan_keys(cfs.sub_meta_cf.clone(), bound_range, u32::MAX)?;
                         for k in iter {
                             txn.del(cfs.sub_meta_cf.clone(), k)?;
@@ -700,10 +660,7 @@ impl<'a> ZsetCommand<'a> {
                         txn.del(cfs.meta_cf.clone(), meta_key)?;
                     } else {
                         // update size to a random sub meta key
-                        let sub_meta_key = self
-                            .inner_db
-                            .key_encoder
-                            .encode_sub_meta_key(&key, version, rand_idx);
+                        let sub_meta_key = KeyEncoder::encode_sub_meta_key(&key, version, rand_idx);
                         let new_sub_meta_value = txn
                             .get_for_update(cfs.sub_meta_cf.clone(), sub_meta_key.clone())?
                             .map_or_else(
@@ -733,11 +690,11 @@ impl<'a> ZsetCommand<'a> {
     }
 
     pub async fn zrank(self, key: &str, member: &str) -> RocksResult<Frame> {
-        let client = &self.inner_db.client;
+        let client = self.client;
         let cfs = ZsetCF::new(client);
         let key = key.to_owned();
         let member = member.to_owned();
-        let meta_key = self.inner_db.key_encoder.encode_meta_key(&key);
+        let meta_key = KeyEncoder::encode_meta_key(&key);
 
         client.exec_txn(|txn| {
             match txn.get(cfs.meta_cf.clone(), meta_key.clone())? {
@@ -753,24 +710,17 @@ impl<'a> ZsetCommand<'a> {
                         return Ok(resp_nil());
                     }
 
-                    let data_key = self
-                        .inner_db
-                        .key_encoder
-                        .encode_zset_data_key(&key, &member, version);
+                    let data_key = KeyEncoder::encode_zset_data_key(&key, &member, version);
                     match txn.get(cfs.data_cf.clone(), data_key)? {
                         Some(data_value) => {
                             // calculate the score rank in score key index
                             let score = KeyDecoder::decode_key_zset_data_value(&data_value);
-                            let score_key = self
-                                .inner_db
-                                .key_encoder
-                                .encode_zset_score_key(&key, score, &member, version);
+                            let score_key =
+                                KeyEncoder::encode_zset_score_key(&key, score, &member, version);
 
                             // scan from range start
-                            let bound_range = self
-                                .inner_db
-                                .key_encoder
-                                .encode_zset_score_key_range(&key, version);
+                            let bound_range =
+                                KeyEncoder::encode_zset_score_key_range(&key, version);
                             let iter =
                                 txn.scan_keys(cfs.score_cf.clone(), bound_range, u32::MAX)?;
                             let mut rank = 0;
@@ -795,11 +745,11 @@ impl<'a> ZsetCommand<'a> {
             return Ok(resp_err(REDIS_VALUE_IS_NOT_VALID_FLOAT_ERR));
         }
 
-        let client = &self.inner_db.client;
+        let client = self.client;
         let cfs = ZsetCF::new(client);
         let key = key.to_owned();
         let member = member.to_owned();
-        let meta_key = self.inner_db.key_encoder.encode_meta_key(&key);
+        let meta_key = KeyEncoder::encode_meta_key(&key);
 
         let resp = client.exec_txn(|txn| {
             let prev_score;
@@ -824,30 +774,25 @@ impl<'a> ZsetCommand<'a> {
                             cfs.gc_cf.clone(),
                             cfs.gc_version_cf.clone(),
                             &key,
-                            &self.inner_db.key_encoder,
                         )?;
                     }
 
-                    data_key = self
-                        .inner_db
-                        .key_encoder
-                        .encode_zset_data_key(&key, &member, version);
+                    data_key = KeyEncoder::encode_zset_data_key(&key, &member, version);
 
                     match txn.get_for_update(cfs.data_cf.clone(), data_key.clone())? {
                         Some(data_value) => {
                             prev_score = KeyDecoder::decode_key_zset_data_value(&data_value);
-                            let prev_score_key = self
-                                .inner_db
-                                .key_encoder
-                                .encode_zset_score_key(&key, prev_score, &member, version);
+                            let prev_score_key = KeyEncoder::encode_zset_score_key(
+                                &key, prev_score, &member, version,
+                            );
                             txn.del(cfs.score_cf.clone(), prev_score_key)?;
                         }
                         None => {
                             prev_score = 0f64;
-                            let sub_meta_key = self.inner_db.key_encoder.encode_sub_meta_key(
+                            let sub_meta_key = KeyEncoder::encode_sub_meta_key(
                                 &key,
                                 version,
-                                self.inner_db.gen_next_meta_index(),
+                                self.client.gen_next_meta_index(),
                             );
                             let new_sub_meta_value = txn
                                 .get_for_update(cfs.sub_meta_cf.clone(), sub_meta_key.clone())?
@@ -867,10 +812,8 @@ impl<'a> ZsetCommand<'a> {
 
                             // add meta key if key expired above
                             if expired {
-                                let new_meta_value = self
-                                    .inner_db
-                                    .key_encoder
-                                    .encode_zset_meta_value(ttl, version, 0);
+                                let new_meta_value =
+                                    KeyEncoder::encode_zset_meta_value(ttl, version, 0);
                                 txn.put(cfs.meta_cf.clone(), meta_key, new_meta_value)?;
                             }
                         }
@@ -882,22 +825,15 @@ impl<'a> ZsetCommand<'a> {
                         cfs.gc_cf.clone(),
                         cfs.gc_version_cf.clone(),
                         &key,
-                        &self.inner_db.key_encoder,
                     )?;
                     prev_score = 0f64;
-                    let meta_value = self
-                        .inner_db
-                        .key_encoder
-                        .encode_zset_meta_value(0, version, 0);
+                    let meta_value = KeyEncoder::encode_zset_meta_value(0, version, 0);
                     txn.put(cfs.meta_cf.clone(), meta_key, meta_value)?;
-                    data_key = self
-                        .inner_db
-                        .key_encoder
-                        .encode_zset_data_key(&key, &member, version);
-                    let sub_meta_key = self.inner_db.key_encoder.encode_sub_meta_key(
+                    data_key = KeyEncoder::encode_zset_data_key(&key, &member, version);
+                    let sub_meta_key = KeyEncoder::encode_sub_meta_key(
                         &key,
                         version,
-                        self.inner_db.gen_next_meta_index(),
+                        self.client.gen_next_meta_index(),
                     );
                     txn.put(
                         cfs.sub_meta_cf.clone(),
@@ -907,12 +843,9 @@ impl<'a> ZsetCommand<'a> {
                 }
             }
             let new_score = prev_score + step;
-            let score_key = self
-                .inner_db
-                .key_encoder
-                .encode_zset_score_key(&key, new_score, &member, version);
+            let score_key = KeyEncoder::encode_zset_score_key(&key, new_score, &member, version);
             // add data key and score key
-            let data_value = self.inner_db.key_encoder.encode_zset_data_value(new_score);
+            let data_value = KeyEncoder::encode_zset_data_value(new_score);
             txn.put(cfs.data_cf.clone(), data_key, data_value)?;
             txn.put(cfs.score_cf.clone(), score_key, member)?;
 
@@ -926,12 +859,12 @@ impl<'a> ZsetCommand<'a> {
     }
 
     pub async fn zrem(self, key: &str, members: &Vec<String>) -> RocksResult<Frame> {
-        let client = &self.inner_db.client;
+        let client = self.client;
         let cfs = ZsetCF::new(client);
         let key = key.to_owned();
         let members = members.to_owned();
-        let meta_key = self.inner_db.key_encoder.encode_meta_key(&key);
-        let rand_idx = self.inner_db.gen_next_meta_index();
+        let meta_key = KeyEncoder::encode_meta_key(&key);
+        let rand_idx = self.client.gen_next_meta_index();
 
         let resp = client.exec_txn(|txn| {
             match txn.get(cfs.meta_cf.clone(), meta_key.clone())? {
@@ -949,11 +882,7 @@ impl<'a> ZsetCommand<'a> {
 
                     let data_keys: Vec<Key> = members
                         .iter()
-                        .map(|member| {
-                            self.inner_db
-                                .key_encoder
-                                .encode_zset_data_key(&key, member, version)
-                        })
+                        .map(|member| KeyEncoder::encode_zset_data_key(&key, member, version))
                         .collect();
                     let data_map: HashMap<Key, Value> = txn
                         .batch_get_for_update(cfs.data_cf.clone(), data_keys.clone())?
@@ -966,7 +895,7 @@ impl<'a> ZsetCommand<'a> {
                             // decode the score vec to i64
                             let iscore = KeyDecoder::decode_key_zset_data_value(score);
                             // remove member and score key
-                            let score_key = self.inner_db.key_encoder.encode_zset_score_key(
+                            let score_key = KeyEncoder::encode_zset_score_key(
                                 &key,
                                 iscore,
                                 &members[idx],
@@ -981,20 +910,14 @@ impl<'a> ZsetCommand<'a> {
                     let size = self.sum_key_size(&key, version)?;
                     // clear all sub meta keys and meta key if all members removed
                     if removed_count >= size {
-                        let bound_range = self
-                            .inner_db
-                            .key_encoder
-                            .encode_sub_meta_key_range(&key, version);
+                        let bound_range = KeyEncoder::encode_sub_meta_key_range(&key, version);
                         let iter = txn.scan_keys(cfs.sub_meta_cf.clone(), bound_range, u32::MAX)?;
                         for k in iter {
                             txn.del(cfs.sub_meta_cf.clone(), k)?;
                         }
                         txn.del(cfs.meta_cf.clone(), meta_key)?;
                     } else {
-                        let sub_meta_key = self
-                            .inner_db
-                            .key_encoder
-                            .encode_sub_meta_key(&key, version, rand_idx);
+                        let sub_meta_key = KeyEncoder::encode_sub_meta_key(&key, version, rand_idx);
                         let new_sub_meta_value = txn
                             .get_for_update(cfs.sub_meta_cf.clone(), sub_meta_key.clone())?
                             .map_or_else(
@@ -1030,11 +953,11 @@ impl<'a> ZsetCommand<'a> {
         mut min: i64,
         mut max: i64,
     ) -> RocksResult<Frame> {
-        let client = &self.inner_db.client;
+        let client = self.client;
         let cfs = ZsetCF::new(client);
         let key = key.to_owned();
-        let meta_key = self.inner_db.key_encoder.encode_meta_key(&key);
-        let rand_idx = self.inner_db.gen_next_meta_index();
+        let meta_key = KeyEncoder::encode_meta_key(&key);
+        let rand_idx = self.client.gen_next_meta_index();
 
         let resp = client.exec_txn(|txn| {
             let mut removed_count = 0;
@@ -1060,10 +983,7 @@ impl<'a> ZsetCommand<'a> {
                         max += size;
                     }
 
-                    let bound_range = self
-                        .inner_db
-                        .key_encoder
-                        .encode_zset_score_key_range(&key, version);
+                    let bound_range = KeyEncoder::encode_zset_score_key_range(&key, version);
                     let iter =
                         txn.scan(cfs.score_cf.clone(), bound_range, size.try_into().unwrap())?;
 
@@ -1080,10 +1000,7 @@ impl<'a> ZsetCommand<'a> {
 
                         let member = String::from_utf8_lossy(&kv.1);
                         // encode member key
-                        let member_key = self
-                            .inner_db
-                            .key_encoder
-                            .encode_zset_data_key(&key, &member, version);
+                        let member_key = KeyEncoder::encode_zset_data_key(&key, &member, version);
 
                         // delete member key and score key
                         txn.del(cfs.data_cf.clone(), member_key)?;
@@ -1094,20 +1011,14 @@ impl<'a> ZsetCommand<'a> {
                     // update sub meta key
                     // clear all sub meta keys and meta key if all members removed
                     if removed_count >= size {
-                        let bound_range = self
-                            .inner_db
-                            .key_encoder
-                            .encode_sub_meta_key_range(&key, version);
+                        let bound_range = KeyEncoder::encode_sub_meta_key_range(&key, version);
                         let iter = txn.scan_keys(cfs.sub_meta_cf.clone(), bound_range, u32::MAX)?;
                         for k in iter {
                             txn.del(cfs.sub_meta_cf.clone(), k)?;
                         }
                         txn.del(cfs.meta_cf.clone(), meta_key)?;
                     } else {
-                        let sub_meta_key = self
-                            .inner_db
-                            .key_encoder
-                            .encode_sub_meta_key(&key, version, rand_idx);
+                        let sub_meta_key = KeyEncoder::encode_sub_meta_key(&key, version, rand_idx);
                         let new_sub_meta_value = txn
                             .get_for_update(cfs.sub_meta_cf.clone(), sub_meta_key.clone())?
                             .map_or_else(
@@ -1138,11 +1049,11 @@ impl<'a> ZsetCommand<'a> {
     }
 
     pub async fn zremrange_by_score(self, key: &str, min: f64, max: f64) -> RocksResult<Frame> {
-        let client = &self.inner_db.client;
+        let client = self.client;
         let cfs = ZsetCF::new(client);
         let key = key.to_owned();
-        let meta_key = self.inner_db.key_encoder.encode_meta_key(&key);
-        let rand_idx = self.inner_db.gen_next_meta_index();
+        let meta_key = KeyEncoder::encode_meta_key(&key);
+        let rand_idx = self.client.gen_next_meta_index();
 
         let resp = client.exec_txn(|txn| {
             match txn.get(cfs.meta_cf.clone(), meta_key.clone())? {
@@ -1163,14 +1074,10 @@ impl<'a> ZsetCommand<'a> {
                     }
 
                     // generate score key range to remove, inclusive
-                    let score_key_start = self
-                        .inner_db
-                        .key_encoder
-                        .encode_zset_score_key_score_start(&key, min, true, version);
-                    let score_key_end = self
-                        .inner_db
-                        .key_encoder
-                        .encode_zset_score_key_score_end(&key, max, true, version);
+                    let score_key_start =
+                        KeyEncoder::encode_zset_score_key_score_start(&key, min, true, version);
+                    let score_key_end =
+                        KeyEncoder::encode_zset_score_key_score_end(&key, max, true, version);
 
                     // remove score key and data key
                     let range = score_key_start..=score_key_end;
@@ -1184,7 +1091,7 @@ impl<'a> ZsetCommand<'a> {
                         let member =
                             KeyDecoder::decode_key_zset_member_from_scorekey(&key, k.clone());
                         // fetch this score key member
-                        let data_key = self.inner_db.key_encoder.encode_zset_data_key(
+                        let data_key = KeyEncoder::encode_zset_data_key(
                             &key,
                             &String::from_utf8_lossy(&member),
                             version,
@@ -1197,10 +1104,7 @@ impl<'a> ZsetCommand<'a> {
                     let size = self.sum_key_size(&key, version)?;
                     // delete all sub meta keys and meta key if all members removed
                     if removed_count >= size {
-                        let bound_range = self
-                            .inner_db
-                            .key_encoder
-                            .encode_sub_meta_key_range(&key, version);
+                        let bound_range = KeyEncoder::encode_sub_meta_key_range(&key, version);
                         let iter = txn.scan_keys(cfs.sub_meta_cf.clone(), bound_range, u32::MAX)?;
                         for k in iter {
                             txn.del(cfs.sub_meta_cf.clone(), k)?;
@@ -1208,10 +1112,7 @@ impl<'a> ZsetCommand<'a> {
                         txn.del(cfs.meta_cf.clone(), meta_key)?;
                     } else {
                         // update a random sub meta key
-                        let sub_meta_key = self
-                            .inner_db
-                            .key_encoder
-                            .encode_sub_meta_key(&key, version, rand_idx);
+                        let sub_meta_key = KeyEncoder::encode_sub_meta_key(&key, version, rand_idx);
                         let new_sub_meta_value = txn
                             .get_for_update(cfs.sub_meta_cf.clone(), sub_meta_key.clone())?
                             .map_or_else(
@@ -1242,22 +1143,19 @@ impl<'a> ZsetCommand<'a> {
     }
 
     fn sum_key_size(&self, key: &str, version: u16) -> RocksResult<i64> {
-        let client = &self.inner_db.client;
+        let client = self.client;
         let cfs = ZsetCF::new(client);
         let key = key.to_owned();
 
         client.exec_txn(move |txn| {
             // check if meta key exists or already expired
-            let meta_key = self.inner_db.key_encoder.encode_meta_key(&key);
+            let meta_key = KeyEncoder::encode_meta_key(&key);
             match txn.get(cfs.meta_cf, meta_key)? {
                 Some(meta_value) => {
                     if !matches!(KeyDecoder::decode_key_type(&meta_value), DataType::Zset) {
                         return Err(REDIS_WRONG_TYPE_ERR);
                     }
-                    let bound_range = self
-                        .inner_db
-                        .key_encoder
-                        .encode_sub_meta_key_range(&key, version);
+                    let bound_range = KeyEncoder::encode_sub_meta_key_range(&key, version);
                     let iter = txn.scan(cfs.sub_meta_cf.clone(), bound_range, u32::MAX)?;
 
                     let sum = iter
@@ -1274,8 +1172,8 @@ impl<'a> ZsetCommand<'a> {
 impl TxnCommand for ZsetCommand<'_> {
     fn txn_del(&self, txn: &RocksTransaction, key: &str) -> RocksResult<()> {
         let key = key.to_owned();
-        let meta_key = self.inner_db.key_encoder.encode_meta_key(&key);
-        let cfs = ZsetCF::new(&self.inner_db.client);
+        let meta_key = KeyEncoder::encode_meta_key(&key);
+        let cfs = ZsetCF::new(self.client);
 
         match txn.get(cfs.meta_cf.clone(), meta_key.clone())? {
             Some(meta_value) => {
@@ -1286,23 +1184,17 @@ impl TxnCommand for ZsetCommand<'_> {
                     // async del zset
                     txn.del(cfs.meta_cf.clone(), meta_key)?;
 
-                    let gc_key = self.inner_db.key_encoder.encode_gc_key(&key);
+                    let gc_key = KeyEncoder::encode_gc_key(&key);
                     txn.put(cfs.gc_cf.clone(), gc_key, version.to_be_bytes().to_vec())?;
 
-                    let gc_version_key = self
-                        .inner_db
-                        .key_encoder
-                        .encode_gc_version_key(&key, version);
+                    let gc_version_key = KeyEncoder::encode_gc_version_key(&key, version);
                     txn.put(
                         cfs.gc_version_cf.clone(),
                         gc_version_key,
-                        vec![self.inner_db.key_encoder.get_type_bytes(DataType::Zset)],
+                        vec![KeyEncoder::get_type_bytes(DataType::Zset)],
                     )?;
                 } else {
-                    let bound_range = self
-                        .inner_db
-                        .key_encoder
-                        .encode_zset_data_key_range(&key, version);
+                    let bound_range = KeyEncoder::encode_zset_data_key_range(&key, version);
                     let iter = txn.scan(cfs.data_cf.clone(), bound_range, u32::MAX)?;
                     for kv in iter {
                         // kv.0 is member key
@@ -1316,19 +1208,14 @@ impl TxnCommand for ZsetCommand<'_> {
                         let member = String::from_utf8_lossy(&member_vec);
 
                         // remove member and score key
-                        let score_key = self
-                            .inner_db
-                            .key_encoder
-                            .encode_zset_score_key(&key, score, &member, version);
+                        let score_key =
+                            KeyEncoder::encode_zset_score_key(&key, score, &member, version);
                         txn.del(cfs.data_cf.clone(), kv.0)?;
                         txn.del(cfs.score_cf.clone(), score_key)?;
                     }
 
                     // delete all sub meta keys
-                    let bound_range = self
-                        .inner_db
-                        .key_encoder
-                        .encode_sub_meta_key_range(&key, version);
+                    let bound_range = KeyEncoder::encode_sub_meta_key_range(&key, version);
                     let iter = txn.scan_keys(cfs.sub_meta_cf.clone(), bound_range, u32::MAX)?;
                     for k in iter {
                         txn.del(cfs.sub_meta_cf.clone(), k)?;
@@ -1343,8 +1230,8 @@ impl TxnCommand for ZsetCommand<'_> {
 
     fn txn_expire_if_needed(&self, txn: &RocksTransaction, key: &str) -> RocksResult<i64> {
         let key = key.to_owned();
-        let meta_key = self.inner_db.key_encoder.encode_meta_key(&key);
-        let cfs = ZsetCF::new(&self.inner_db.client);
+        let meta_key = KeyEncoder::encode_meta_key(&key);
+        let cfs = ZsetCF::new(self.client);
 
         match txn.get(cfs.meta_cf.clone(), meta_key.clone())? {
             Some(meta_value) => {
@@ -1361,23 +1248,17 @@ impl TxnCommand for ZsetCommand<'_> {
                     // async del zset
                     txn.del(cfs.meta_cf.clone(), meta_key)?;
 
-                    let gc_key = self.inner_db.key_encoder.encode_gc_key(&key);
+                    let gc_key = KeyEncoder::encode_gc_key(&key);
                     txn.put(cfs.gc_cf.clone(), gc_key, version.to_be_bytes().to_vec())?;
 
-                    let gc_version_key = self
-                        .inner_db
-                        .key_encoder
-                        .encode_gc_version_key(&key, version);
+                    let gc_version_key = KeyEncoder::encode_gc_version_key(&key, version);
                     txn.put(
                         cfs.gc_version_cf.clone(),
                         gc_version_key,
-                        vec![self.inner_db.key_encoder.get_type_bytes(DataType::Zset)],
+                        vec![KeyEncoder::get_type_bytes(DataType::Zset)],
                     )?;
                 } else {
-                    let bound_range = self
-                        .inner_db
-                        .key_encoder
-                        .encode_zset_data_key_range(&key, version);
+                    let bound_range = KeyEncoder::encode_zset_data_key_range(&key, version);
                     let iter = txn.scan(cfs.data_cf.clone(), bound_range, u32::MAX)?;
                     for kv in iter {
                         // kv.0 is member key
@@ -1391,19 +1272,14 @@ impl TxnCommand for ZsetCommand<'_> {
                         let member = String::from_utf8_lossy(&member_vec);
 
                         // remove member and score key
-                        let score_key = self
-                            .inner_db
-                            .key_encoder
-                            .encode_zset_score_key(&key, score, &member, version);
+                        let score_key =
+                            KeyEncoder::encode_zset_score_key(&key, score, &member, version);
                         txn.del(cfs.data_cf.clone(), kv.0)?;
                         txn.del(cfs.score_cf.clone(), score_key)?;
                     }
 
                     // delete all sub meta keys
-                    let bound_range = self
-                        .inner_db
-                        .key_encoder
-                        .encode_sub_meta_key_range(&key, version);
+                    let bound_range = KeyEncoder::encode_sub_meta_key_range(&key, version);
                     let iter = txn.scan_keys(cfs.sub_meta_cf.clone(), bound_range, u32::MAX)?;
                     for k in iter {
                         txn.del(cfs.sub_meta_cf.clone(), k)?;
@@ -1423,49 +1299,37 @@ impl TxnCommand for ZsetCommand<'_> {
         timestamp: i64,
         meta_value: &Value,
     ) -> RocksResult<i64> {
-        let cfs = ZsetCF::new(&self.inner_db.client);
-        let meta_key = self.inner_db.key_encoder.encode_meta_key(key);
+        let cfs = ZsetCF::new(self.client);
+        let meta_key = KeyEncoder::encode_meta_key(key);
         let ttl = KeyDecoder::decode_key_ttl(meta_value);
         if key_is_expired(ttl) {
             self.txn_expire_if_needed(txn, key)?;
             return Ok(0);
         }
         let version = KeyDecoder::decode_key_version(meta_value);
-        let new_meta_value = self
-            .inner_db
-            .key_encoder
-            .encode_zset_meta_value(timestamp, version, 0);
+        let new_meta_value = KeyEncoder::encode_zset_meta_value(timestamp, version, 0);
         txn.put(cfs.meta_cf.clone(), meta_key, new_meta_value)?;
         Ok(1)
     }
 
     fn txn_gc(&self, txn: &RocksTransaction, key: &str, version: u16) -> RocksResult<()> {
-        let cfs = ZsetCF::new(&self.inner_db.client);
+        let cfs = ZsetCF::new(self.client);
         // delete all sub meta key of this key and version
-        let bound_range = self
-            .inner_db
-            .key_encoder
-            .encode_sub_meta_key_range(key, version);
+        let bound_range = KeyEncoder::encode_sub_meta_key_range(key, version);
         let iter = txn.scan_keys(cfs.sub_meta_cf.clone(), bound_range, u32::MAX)?;
         for k in iter {
             txn.del(cfs.sub_meta_cf.clone(), k)?;
         }
 
         // delete all score key of this key and version
-        let bound_range = self
-            .inner_db
-            .key_encoder
-            .encode_zset_score_key_range(key, version);
+        let bound_range = KeyEncoder::encode_zset_score_key_range(key, version);
         let iter = txn.scan_keys(cfs.score_cf.clone(), bound_range, u32::MAX)?;
         for k in iter {
             txn.del(cfs.score_cf.clone(), k)?;
         }
 
         // delete all data key of this key and version
-        let bound_range = self
-            .inner_db
-            .key_encoder
-            .encode_zset_data_key_range(key, version);
+        let bound_range = KeyEncoder::encode_zset_data_key_range(key, version);
         let iter = txn.scan_keys(cfs.data_cf.clone(), bound_range, u32::MAX)?;
         for k in iter {
             txn.del(cfs.data_cf.clone(), k)?;

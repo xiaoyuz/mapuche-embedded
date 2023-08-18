@@ -1,5 +1,4 @@
-use crate::cmd::Invalid;
-use crate::db::DBInner;
+use crate::{cmd::Invalid, rocks::client::RocksClient};
 
 use crate::rocks::string::StringCommand;
 use crate::utils::resp_invalid_arguments;
@@ -29,11 +28,11 @@ impl Mget {
         &self.keys
     }
 
-    pub async fn execute(&mut self, inner_db: &DBInner) -> RocksResult<Frame> {
+    pub async fn execute(&mut self, client: &RocksClient) -> RocksResult<Frame> {
         if !self.valid {
             return Ok(resp_invalid_arguments());
         }
-        StringCommand::new(inner_db).batch_get(&self.keys).await
+        StringCommand::new(client).batch_get(&self.keys).await
     }
 }
 

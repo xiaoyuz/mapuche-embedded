@@ -1,6 +1,6 @@
 use crate::cmd::Invalid;
-use crate::db::DBInner;
 
+use crate::rocks::client::RocksClient;
 use crate::Frame;
 
 use serde::{Deserialize, Serialize};
@@ -28,11 +28,11 @@ impl Exists {
         &self.keys
     }
 
-    pub async fn execute(&self, inner_db: &DBInner) -> RocksResult<Frame> {
+    pub async fn execute(&self, client: &RocksClient) -> RocksResult<Frame> {
         if !self.valid {
             return Ok(resp_invalid_arguments());
         }
-        StringCommand::new(inner_db).exists(&self.keys).await
+        StringCommand::new(client).exists(&self.keys).await
     }
 }
 

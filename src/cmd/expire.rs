@@ -1,6 +1,6 @@
 use crate::cmd::{retry_call, Invalid};
-use crate::db::DBInner;
 
+use crate::rocks::client::RocksClient;
 use crate::Frame;
 
 use futures::FutureExt;
@@ -37,7 +37,7 @@ impl Expire {
 
     pub async fn execute(
         &self,
-        inner_db: &DBInner,
+        client: &RocksClient,
         is_millis: bool,
         expire_at: bool,
     ) -> RocksResult<Frame> {
@@ -53,7 +53,7 @@ impl Expire {
                 if !expire_at {
                     ttl = timestamp_from_ttl(ttl);
                 }
-                StringCommand::new(inner_db)
+                StringCommand::new(client)
                     .expire(&self.key, ttl)
                     .await
                     .map_err(Into::into)

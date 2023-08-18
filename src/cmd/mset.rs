@@ -1,5 +1,5 @@
-use crate::cmd::Invalid;
-use crate::db::DBInner;
+use crate::rocks::client::RocksClient;
+use crate::{cmd::Invalid, rocks::encoding::KeyEncoder};
 
 use crate::rocks::kv::kvpair::KvPair;
 use crate::rocks::string::StringCommand;
@@ -36,21 +36,19 @@ impl Mset {
         &self.vals
     }
 
-    pub async fn execute(&mut self, inner_db: &DBInner) -> RocksResult<Frame> {
+    pub async fn execute(&mut self, client: &RocksClient) -> RocksResult<Frame> {
         if !self.valid {
             return Ok(resp_invalid_arguments());
         }
         let mut kvs = Vec::new();
         for (idx, key) in self.keys.iter().enumerate() {
             let val = &self.vals[idx];
-            let ekey = inner_db.key_encoder.encode_string(key);
-            let eval = inner_db
-                .key_encoder
-                .encode_string_value(&mut val.to_vec(), -1);
+            let ekey = KeyEncoder::encode_string(key);
+            let eval = KeyEncoder::encode_string_value(&mut val.to_vec(), -1);
             let kvpair = KvPair::from((ekey, eval));
             kvs.push(kvpair);
         }
-        StringCommand::new(inner_db).batch_put(kvs).await
+        StringCommand::new(client).batch_put(kvs).await
     }
 }
 

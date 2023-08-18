@@ -1,7 +1,7 @@
-use crate::db::DBInner;
 use crate::Frame;
 
 use crate::cmd::Invalid;
+use crate::rocks::client::RocksClient;
 
 use serde::{Deserialize, Serialize};
 
@@ -28,11 +28,11 @@ impl TTL {
         &self.key
     }
 
-    pub async fn execute(&mut self, inner_db: &DBInner, is_millis: bool) -> RocksResult<Frame> {
+    pub async fn execute(&mut self, client: &RocksClient, is_millis: bool) -> RocksResult<Frame> {
         if !self.valid {
             return Ok(resp_invalid_arguments());
         }
-        StringCommand::new(inner_db).ttl(&self.key, is_millis).await
+        StringCommand::new(client).ttl(&self.key, is_millis).await
     }
 }
 

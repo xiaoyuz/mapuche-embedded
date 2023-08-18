@@ -1,7 +1,11 @@
-use crate::config::async_deletion_enabled_or_default;
+use crate::config::{async_deletion_enabled_or_default, config_meta_key_number_or_default};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 use rocksdb::{
     ColumnFamilyRef, TransactionDB, TransactionOptions, WriteBatchWithTransaction, WriteOptions,
 };
+use std::sync::atomic::AtomicU16;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crate::rocks::errors::{CF_NOT_EXISTS_ERR, KEY_VERSION_EXHUSTED_ERR, TXN_ERROR};
@@ -15,12 +19,17 @@ use crate::rocks::Result as RocksResult;
 use super::encoding::KeyEncoder;
 
 pub struct RocksClient {
+    pub(crate) index_count: AtomicU16,
     client: Arc<TransactionDB>,
 }
 
 impl RocksClient {
     pub fn new(client: Arc<TransactionDB>) -> Self {
-        Self { client }
+        let index_count = AtomicU16::new(SmallRng::from_entropy().gen_range(0..u16::MAX));
+        Self {
+            index_count,
+            client,
+        }
     }
 
     pub fn get(&self, cf: ColumnFamilyRef, key: Key) -> RocksResult<Option<Value>> {
@@ -131,6 +140,11 @@ impl RocksClient {
         }
         Ok(res)
     }
+
+    pub(crate) fn gen_next_meta_index(&self) -> u16 {
+        let idx = self.index_count.fetch_add(1, Ordering::Relaxed);
+        idx % config_meta_key_number_or_default()
+    }
 }
 
 // get_version_for_new must be called outside of a MutexGuard, otherwise it will deadlock.
@@ -139,14 +153,13 @@ pub fn get_version_for_new(
     gc_cf: ColumnFamilyRef,
     gc_version_cf: ColumnFamilyRef,
     key: &str,
-    key_encoder: &KeyEncoder,
 ) -> RocksResult<u16> {
     // check if async deletion is enabled, return ASAP if not
     if !async_deletion_enabled_or_default() {
         return Ok(0);
     }
 
-    let gc_key = key_encoder.encode_gc_key(key);
+    let gc_key = KeyEncoder::encode_gc_key(key);
     let next_version = txn.get(gc_cf.clone(), gc_key)?.map_or_else(
         || 0,
         |v| {
@@ -159,7 +172,7 @@ pub fn get_version_for_new(
         },
     );
     // check next version available
-    let gc_version_key = key_encoder.encode_gc_version_key(key, next_version);
+    let gc_version_key = KeyEncoder::encode_gc_version_key(key, next_version);
     txn.get(gc_version_cf, gc_version_key)?
         .map_or_else(|| Ok(next_version), |_| Err(KEY_VERSION_EXHUSTED_ERR))
 }

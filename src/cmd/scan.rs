@@ -1,7 +1,7 @@
-use crate::db::DBInner;
 use crate::Frame;
 
 use crate::cmd::Invalid;
+use crate::rocks::client::RocksClient;
 
 use serde::{Deserialize, Serialize};
 
@@ -31,11 +31,11 @@ impl Scan {
         self.valid
     }
 
-    pub async fn execute(&mut self, inner_db: &DBInner) -> RocksResult<Frame> {
+    pub async fn execute(&mut self, client: &RocksClient) -> RocksResult<Frame> {
         if !self.valid {
             return Ok(resp_invalid_arguments());
         }
-        StringCommand::new(inner_db)
+        StringCommand::new(client)
             .scan(&self.start, self.count.try_into().unwrap(), &self.regex)
             .await
     }

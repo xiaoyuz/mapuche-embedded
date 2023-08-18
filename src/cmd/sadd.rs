@@ -1,7 +1,7 @@
-use crate::db::DBInner;
 use crate::Frame;
 
 use crate::cmd::Invalid;
+use crate::rocks::client::RocksClient;
 
 use serde::{Deserialize, Serialize};
 
@@ -30,13 +30,11 @@ impl Sadd {
         &self.key
     }
 
-    pub async fn execute(&mut self, inner_db: &DBInner) -> RocksResult<Frame> {
+    pub async fn execute(&mut self, client: &RocksClient) -> RocksResult<Frame> {
         if !self.valid {
             return Ok(resp_invalid_arguments());
         }
-        SetCommand::new(inner_db)
-            .sadd(&self.key, &self.members)
-            .await
+        SetCommand::new(client).sadd(&self.key, &self.members).await
     }
 }
 

@@ -1,7 +1,7 @@
-use crate::db::DBInner;
 use crate::Frame;
 
 use crate::cmd::Invalid;
+use crate::rocks::client::RocksClient;
 
 use serde::{Deserialize, Serialize};
 
@@ -25,11 +25,11 @@ impl Zpop {
         }
     }
 
-    pub async fn execute(&mut self, inner_db: &DBInner, from_min: bool) -> RocksResult<Frame> {
+    pub async fn execute(&mut self, client: &RocksClient, from_min: bool) -> RocksResult<Frame> {
         if !self.valid {
             return Ok(resp_invalid_arguments());
         }
-        ZsetCommand::new(inner_db)
+        ZsetCommand::new(client)
             .zpop(&self.key, from_min, self.count as u64)
             .await
     }

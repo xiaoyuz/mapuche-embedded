@@ -1,7 +1,7 @@
-use crate::db::DBInner;
 use crate::Frame;
 
 use crate::cmd::Invalid;
+use crate::rocks::client::RocksClient;
 use crate::rocks::list::ListCommand;
 use bytes::Bytes;
 
@@ -28,7 +28,7 @@ impl Lrem {
         }
     }
 
-    pub async fn execute(&mut self, inner_db: &DBInner) -> RocksResult<Frame> {
+    pub async fn execute(&mut self, client: &RocksClient) -> RocksResult<Frame> {
         if !self.valid {
             return Ok(resp_invalid_arguments());
         }
@@ -38,7 +38,7 @@ impl Lrem {
             from_head = false;
             count = -count;
         }
-        ListCommand::new(inner_db)
+        ListCommand::new(client)
             .lrem(&self.key, count as usize, from_head, &self.element)
             .await
     }

@@ -1,7 +1,7 @@
-use crate::db::DBInner;
 use crate::Frame;
 
 use crate::cmd::Invalid;
+use crate::rocks::client::RocksClient;
 use crate::rocks::list::ListCommand;
 use bytes::Bytes;
 
@@ -34,11 +34,11 @@ impl Push {
         &self.items
     }
 
-    pub async fn execute(&mut self, inner_db: &DBInner, op_left: bool) -> RocksResult<Frame> {
+    pub async fn execute(&mut self, client: &RocksClient, op_left: bool) -> RocksResult<Frame> {
         if !self.valid {
             return Ok(resp_invalid_arguments());
         }
-        ListCommand::new(inner_db)
+        ListCommand::new(client)
             .push(&self.key, &self.items, op_left)
             .await
     }

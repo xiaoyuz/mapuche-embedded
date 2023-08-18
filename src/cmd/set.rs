@@ -1,5 +1,6 @@
 use crate::cmd::Invalid;
-use crate::db::DBInner;
+
+use crate::rocks::client::RocksClient;
 use crate::Frame;
 
 use bytes::Bytes;
@@ -74,25 +75,25 @@ impl Set {
         self.expire
     }
 
-    pub async fn execute(&mut self, inner_db: &DBInner) -> RocksResult<Frame> {
+    pub async fn execute(&mut self, client: &RocksClient) -> RocksResult<Frame> {
         if !self.valid {
             return Ok(resp_invalid_arguments());
         }
         match self.nx {
-            Some(_) => self.put_not_exists(inner_db).await,
-            None => self.put(inner_db).await,
+            Some(_) => self.put_not_exists(client).await,
+            None => self.put(client).await,
         }
     }
 
-    async fn put_not_exists(&self, inner_db: &DBInner) -> RocksResult<Frame> {
-        StringCommand::new(inner_db)
+    async fn put_not_exists(&self, client: &RocksClient) -> RocksResult<Frame> {
+        StringCommand::new(client)
             .put_not_exists(&self.key, &self.value)
             .await
     }
 
-    async fn put(&self, inner_db: &DBInner) -> RocksResult<Frame> {
+    async fn put(&self, client: &RocksClient) -> RocksResult<Frame> {
         let ttl = self.expire.map_or(-1, timestamp_from_ttl);
-        StringCommand::new(inner_db)
+        StringCommand::new(client)
             .put(&self.key, &self.value, ttl)
             .await
     }

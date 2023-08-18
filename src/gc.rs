@@ -4,7 +4,7 @@ use crate::config::{
 };
 use crate::db::DBInner;
 use crate::rocks::client::RocksClient;
-use crate::rocks::encoding::{DataType, KeyDecoder};
+use crate::rocks::encoding::{DataType, KeyDecoder, KeyEncoder};
 use crate::rocks::errors::RError;
 
 use crate::rocks::hash::HashCommand;
@@ -115,7 +115,7 @@ impl GcMaster {
                 continue;
             }
 
-            let bound_range = self.inner_db.key_encoder.encode_gc_version_key_range();
+            let bound_range = KeyEncoder::encode_gc_version_key_range();
 
             // TODO scan speed throttling
             let iter_res = client.scan(gc_cfs.gc_version_cf.clone(), bound_range, u32::MAX);
@@ -199,26 +199,23 @@ impl GcWorker {
                     panic!("string not support async deletion");
                 }
                 DataType::Set => {
-                    SetCommand::new(&self.inner_db).txn_gc(txn, &user_key, version)?;
+                    SetCommand::new(&client).txn_gc(txn, &user_key, version)?;
                 }
                 DataType::List => {
-                    ListCommand::new(&self.inner_db).txn_gc(txn, &user_key, version)?;
+                    ListCommand::new(&client).txn_gc(txn, &user_key, version)?;
                 }
                 DataType::Hash => {
-                    HashCommand::new(&self.inner_db).txn_gc(txn, &user_key, version)?;
+                    HashCommand::new(&client).txn_gc(txn, &user_key, version)?;
                 }
                 DataType::Zset => {
-                    ZsetCommand::new(&self.inner_db).txn_gc(txn, &user_key, version)?;
+                    ZsetCommand::new(&client).txn_gc(txn, &user_key, version)?;
                 }
                 DataType::Null => {
                     panic!("unknown data type to do async deletion");
                 }
             }
             // delete gc version key
-            let gc_version_key = self
-                .inner_db
-                .key_encoder
-                .encode_gc_version_key(&user_key, version);
+            let gc_version_key = KeyEncoder::encode_gc_version_key(&user_key, version);
             txn.del(gc_cfs.gc_version_cf.clone(), gc_version_key)?;
             Ok(())
         })?;
@@ -228,7 +225,7 @@ impl GcWorker {
             let task = task.clone();
             let user_key = String::from_utf8_lossy(&task.user_key);
             // also delete gc key if version in gc key is same as task.version
-            let gc_key = self.inner_db.key_encoder.encode_gc_key(&user_key);
+            let gc_key = KeyEncoder::encode_gc_key(&user_key);
             let version = task.version;
             if let Some(v) = txn.get(gc_cfs.gc_cf.clone(), gc_key.clone())? {
                 let ver = u16::from_be_bytes(v[..2].try_into().unwrap());

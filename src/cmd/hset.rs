@@ -1,7 +1,7 @@
-use crate::db::DBInner;
 use crate::Frame;
 
 use crate::cmd::Invalid;
+use crate::rocks::client::RocksClient;
 use crate::rocks::hash::HashCommand;
 use crate::rocks::kv::kvpair::KvPair;
 
@@ -41,14 +41,14 @@ impl Hset {
 
     pub async fn execute(
         &self,
-        inner_db: &DBInner,
+        client: &RocksClient,
         is_hmset: bool,
         is_nx: bool,
     ) -> RocksResult<Frame> {
         if !self.valid || (is_nx && self.field_and_value.len() != 1) {
             return Ok(resp_invalid_arguments());
         }
-        HashCommand::new(inner_db)
+        HashCommand::new(client)
             .hset(&self.key, &self.field_and_value, is_hmset, is_nx)
             .await
     }

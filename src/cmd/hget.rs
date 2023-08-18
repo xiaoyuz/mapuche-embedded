@@ -1,7 +1,7 @@
-use crate::db::DBInner;
 use crate::Frame;
 
 use crate::cmd::Invalid;
+use crate::rocks::client::RocksClient;
 use crate::rocks::hash::HashCommand;
 
 use serde::{Deserialize, Serialize};
@@ -33,13 +33,11 @@ impl Hget {
         &self.field
     }
 
-    pub async fn execute(&self, inner_db: &DBInner) -> RocksResult<Frame> {
+    pub async fn execute(&self, client: &RocksClient) -> RocksResult<Frame> {
         if !self.valid {
             return Ok(resp_invalid_arguments());
         }
-        HashCommand::new(inner_db)
-            .hget(&self.key, &self.field)
-            .await
+        HashCommand::new(client).hget(&self.key, &self.field).await
     }
 }
 

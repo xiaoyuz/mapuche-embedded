@@ -1,4 +1,4 @@
-use crate::db::DBInner;
+use crate::rocks::client::RocksClient;
 use crate::Frame;
 use serde::{Deserialize, Serialize};
 
@@ -26,11 +26,11 @@ impl Keys {
         self.valid
     }
 
-    pub async fn execute(&mut self, inner_db: &DBInner) -> RocksResult<Frame> {
+    pub async fn execute(&mut self, client: &RocksClient) -> RocksResult<Frame> {
         if !self.valid {
             return Ok(resp_invalid_arguments());
         }
-        StringCommand::new(inner_db).keys(&self.regex).await
+        StringCommand::new(client).keys(&self.regex).await
     }
 }
 

@@ -1,7 +1,7 @@
-use crate::db::DBInner;
 use crate::Frame;
 
 use crate::cmd::Invalid;
+use crate::rocks::client::RocksClient;
 
 use serde::{Deserialize, Serialize};
 
@@ -25,13 +25,13 @@ impl Sismember {
         }
     }
 
-    pub async fn execute(&mut self, inner_db: &DBInner) -> RocksResult<Frame> {
+    pub async fn execute(&mut self, client: &RocksClient) -> RocksResult<Frame> {
         if !self.valid {
             return Ok(resp_invalid_arguments());
         }
         let mut members = vec![];
         members.push(self.member.clone());
-        SetCommand::new(inner_db)
+        SetCommand::new(client)
             .sismember(&self.key, &members, false)
             .await
     }

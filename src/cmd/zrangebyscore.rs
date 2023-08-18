@@ -1,7 +1,7 @@
-use crate::db::DBInner;
 use crate::Frame;
 
 use crate::cmd::Invalid;
+use crate::rocks::client::RocksClient;
 
 use serde::{Deserialize, Serialize};
 
@@ -40,11 +40,11 @@ impl Zrangebyscore {
         }
     }
 
-    pub async fn execute(&mut self, inner_db: &DBInner, reverse: bool) -> RocksResult<Frame> {
+    pub async fn execute(&mut self, client: &RocksClient, reverse: bool) -> RocksResult<Frame> {
         if !self.valid {
             return Ok(resp_invalid_arguments());
         }
-        ZsetCommand::new(inner_db)
+        ZsetCommand::new(client)
             .zrange_by_score(
                 &self.key,
                 self.min,

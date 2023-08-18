@@ -1,7 +1,7 @@
-use crate::db::DBInner;
 use crate::Frame;
 
 use crate::cmd::Invalid;
+use crate::rocks::client::RocksClient;
 
 use serde::{Deserialize, Serialize};
 
@@ -28,11 +28,11 @@ impl Del {
         &self.keys
     }
 
-    pub async fn execute(&self, inner_db: &DBInner) -> RocksResult<Frame> {
+    pub async fn execute(&self, client: &RocksClient) -> RocksResult<Frame> {
         if !self.valid {
             return Ok(resp_invalid_arguments());
         }
-        StringCommand::new(inner_db).del(&self.keys).await
+        StringCommand::new(client).del(&self.keys).await
     }
 }
 
