@@ -1,0 +1,6 @@
+/target
+/Cargo.lock
+.idea
+.rocksdb_store
+mapuche_store
+rocksdb-service.log
