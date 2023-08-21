@@ -1,7 +1,7 @@
 use rocksdb::ColumnFamilyRef;
 
-use crate::frame::Frame;
 use crate::rocks::Result as RocksResult;
+use crate::{frame::Frame, utils::resp_nil};
 
 use super::{
     client::RocksClient,
@@ -120,6 +120,6 @@ impl<'a> GcCommand<'a> {
                 Ok(())
             })?;
         }
-        Ok(Frame::Null)
+        Ok(resp_nil())
     }
 }

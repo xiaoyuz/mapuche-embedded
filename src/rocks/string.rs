@@ -70,7 +70,7 @@ impl<'a> StringCommand<'a> {
                 let data = KeyDecoder::decode_key_string_value(&val);
                 Ok(resp_bulk(data))
             }
-            None => Ok(Frame::Null),
+            None => Ok(resp_nil()),
         }
     }
 
@@ -146,17 +146,17 @@ impl<'a> StringCommand<'a> {
                             client
                                 .del(cfs.meta_cf.clone(), k)
                                 .expect("remove outdated data failed");
-                            Frame::Null
+                            resp_nil()
                         } else {
                             let data = KeyDecoder::decode_key_string_value(val);
                             resp_bulk(data)
                         }
                     }
-                    None => Frame::Null,
+                    None => resp_nil(),
                 }
             })
             .collect();
-        Ok(Frame::Array(values))
+        Ok(resp_array(values))
     }
 
     pub async fn batch_put(self, kvs: Vec<KvPair>) -> RocksResult<Frame> {
