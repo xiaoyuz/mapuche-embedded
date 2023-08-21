@@ -1,12 +1,13 @@
 use mapuche::{
     cmd::{Command, Zadd, Zcard, Zrange, Zrem},
-    DB,
+    OpenOptions,
 };
 use tokio::spawn;
 
 #[tokio::main]
 async fn main() {
-    let db = DB::open("./mapuche_store").await.unwrap();
+    let options = OpenOptions::new().gc_enable(true);
+    let db = options.open("./mapuche_store").await.unwrap();
 
     let db1 = db.clone();
     let t1 = spawn(async move {

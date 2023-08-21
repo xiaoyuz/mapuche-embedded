@@ -11,6 +11,7 @@ use std::{path::Path, sync::Arc};
 pub mod client;
 pub mod encoding;
 pub mod errors;
+pub mod gc;
 pub mod hash;
 pub mod kv;
 pub mod list;
@@ -33,8 +34,6 @@ pub const CF_NAME_ZSET_SCORE: &str = "zset_score";
 
 pub type Result<T> = anyhow::Result<T, RError>;
 
-pub static mut INSTANCE_ID: u64 = 0;
-
 pub trait TxnCommand {
     fn txn_del(&self, txn: &RocksTransaction, key: &str) -> Result<()>;
 
@@ -51,9 +50,9 @@ pub trait TxnCommand {
     fn txn_gc(&self, txn: &RocksTransaction, key: &str, version: u16) -> Result<()>;
 }
 
-pub fn new_client<P: AsRef<Path>>(path: P) -> Result<RocksClient> {
+pub fn new_client<P: AsRef<Path>>(path: P, async_deletion_enabled: bool) -> Result<RocksClient> {
     let db: TransactionDB = new_db(path)?;
-    Ok(RocksClient::new(Arc::new(db)))
+    Ok(RocksClient::new(Arc::new(db), async_deletion_enabled))
 }
 
 fn new_db<P: AsRef<Path>>(path: P) -> Result<TransactionDB<MultiThreaded>> {
@@ -77,8 +76,4 @@ fn new_db<P: AsRef<Path>>(path: P) -> Result<TransactionDB<MultiThreaded>> {
     ];
 
     TransactionDB::open_cf(&opts, &transaction_opts, path, cf_names).map_err(|e| e.into())
-}
-
-pub fn get_instance_id() -> u64 {
-    unsafe { INSTANCE_ID }
 }

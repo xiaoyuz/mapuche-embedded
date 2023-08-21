@@ -2,13 +2,14 @@ use std::{thread, time::Duration};
 
 use mapuche::{
     cmd::{Command, Get, Lrange, Lrem, Push, Set, Zadd, Zcard, Zrange, Zrem},
-    DB,
+    OpenOptions,
 };
 use tokio::{join, task::spawn};
 
 #[tokio::test]
 async fn db_conn() {
-    let db = DB::open("./mapuche_store").await.unwrap();
+    let options = OpenOptions::new();
+    let db = options.open("./mapuche_store").await.unwrap();
     let conn = db.conn();
     let set_cmd = Command::Set(Set::new("test1", "value", None, None));
     let frame = conn.execute(set_cmd).await.unwrap();
@@ -36,7 +37,8 @@ async fn db_conn() {
 
 #[tokio::test]
 async fn multi_thread() {
-    let db = DB::open("./mapuche_store").await.unwrap();
+    let options = OpenOptions::new();
+    let db = options.open("./mapuche_store").await.unwrap();
 
     let db1 = db.clone();
     let t1 = spawn(async move {

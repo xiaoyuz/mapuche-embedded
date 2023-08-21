@@ -1,4 +1,4 @@
-use crate::config::{async_deletion_enabled_or_default, config_meta_key_number_or_default};
+use crate::config::config_meta_key_number_or_default;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use rocksdb::{
@@ -19,16 +19,18 @@ use crate::rocks::Result as RocksResult;
 use super::encoding::KeyEncoder;
 
 pub struct RocksClient {
-    pub(crate) index_count: AtomicU16,
+    index_count: AtomicU16,
     client: Arc<TransactionDB>,
+    async_deletion_enabled: bool,
 }
 
 impl RocksClient {
-    pub fn new(client: Arc<TransactionDB>) -> Self {
+    pub fn new(client: Arc<TransactionDB>, async_deletion_enabled: bool) -> Self {
         let index_count = AtomicU16::new(SmallRng::from_entropy().gen_range(0..u16::MAX));
         Self {
             index_count,
             client,
+            async_deletion_enabled,
         }
     }
 
@@ -145,34 +147,43 @@ impl RocksClient {
         let idx = self.index_count.fetch_add(1, Ordering::Relaxed);
         idx % config_meta_key_number_or_default()
     }
-}
 
-// get_version_for_new must be called outside of a MutexGuard, otherwise it will deadlock.
-pub fn get_version_for_new(
-    txn: &RocksTransaction,
-    gc_cf: ColumnFamilyRef,
-    gc_version_cf: ColumnFamilyRef,
-    key: &str,
-) -> RocksResult<u16> {
-    // check if async deletion is enabled, return ASAP if not
-    if !async_deletion_enabled_or_default() {
-        return Ok(0);
+    pub fn async_handle_threshold(&self) -> u32 {
+        if self.async_deletion_enabled {
+            1000
+        } else {
+            u32::MAX
+        }
     }
 
-    let gc_key = KeyEncoder::encode_gc_key(key);
-    let next_version = txn.get(gc_cf.clone(), gc_key)?.map_or_else(
-        || 0,
-        |v| {
-            let version = u16::from_be_bytes(v[..].try_into().unwrap());
-            if version == u16::MAX {
-                0
-            } else {
-                version + 1
-            }
-        },
-    );
-    // check next version available
-    let gc_version_key = KeyEncoder::encode_gc_version_key(key, next_version);
-    txn.get(gc_version_cf, gc_version_key)?
-        .map_or_else(|| Ok(next_version), |_| Err(KEY_VERSION_EXHUSTED_ERR))
+    // get_version_for_new must be called outside of a MutexGuard, otherwise it will deadlock.
+    pub fn get_version_for_new(
+        &self,
+        txn: &RocksTransaction,
+        gc_cf: ColumnFamilyRef,
+        gc_version_cf: ColumnFamilyRef,
+        key: &str,
+    ) -> RocksResult<u16> {
+        // check if async deletion is enabled, return ASAP if not
+        if !self.async_deletion_enabled {
+            return Ok(0);
+        }
+
+        let gc_key = KeyEncoder::encode_gc_key(key);
+        let next_version = txn.get(gc_cf.clone(), gc_key)?.map_or_else(
+            || 0,
+            |v| {
+                let version = u16::from_be_bytes(v[..].try_into().unwrap());
+                if version == u16::MAX {
+                    0
+                } else {
+                    version + 1
+                }
+            },
+        );
+        // check next version available
+        let gc_version_key = KeyEncoder::encode_gc_version_key(key, next_version);
+        txn.get(gc_version_cf, gc_version_key)?
+            .map_or_else(|| Ok(next_version), |_| Err(KEY_VERSION_EXHUSTED_ERR))
+    }
 }

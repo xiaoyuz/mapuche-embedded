@@ -1,6 +1,4 @@
-use crate::config::{async_del_set_threshold_or_default, async_expire_set_threshold_or_default};
-
-use crate::rocks::client::{get_version_for_new, RocksClient};
+use crate::rocks::client::RocksClient;
 use crate::rocks::encoding::{DataType, KeyDecoder};
 use crate::rocks::errors::REDIS_WRONG_TYPE_ERR;
 use crate::rocks::kv::key::Key;
@@ -80,7 +78,7 @@ impl<'a> SetCommand<'a> {
                     if key_is_expired(ttl) {
                         self.txn_expire_if_needed(txn, &key)?;
                         expired = true;
-                        version = get_version_for_new(
+                        version = client.get_version_for_new(
                             txn,
                             cfs.gc_cf.clone(),
                             cfs.gc_version_cf.clone(),
@@ -126,7 +124,7 @@ impl<'a> SetCommand<'a> {
                     Ok(added)
                 }
                 None => {
-                    let version = get_version_for_new(
+                    let version = client.get_version_for_new(
                         txn,
                         cfs.gc_cf.clone(),
                         cfs.gc_version_cf.clone(),
@@ -594,7 +592,7 @@ impl TxnCommand for SetCommand<'_> {
                 let version = KeyDecoder::decode_key_version(&meta_value);
                 let size = self.sum_key_size(&key, version)?;
 
-                if size > async_del_set_threshold_or_default() as i64 {
+                if size > self.client.async_handle_threshold() as i64 {
                     // async del set
                     txn.del(cfs.meta_cf.clone(), meta_key)?;
 
@@ -640,7 +638,7 @@ impl TxnCommand for SetCommand<'_> {
                     return Ok(0);
                 }
                 let size = self.sum_key_size(&key, version)?;
-                if size > async_expire_set_threshold_or_default() as i64 {
+                if size > self.client.async_handle_threshold() as i64 {
                     // async del set
                     txn.del(cfs.meta_cf.clone(), meta_key)?;
 

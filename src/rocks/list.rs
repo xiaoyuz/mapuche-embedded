@@ -1,13 +1,7 @@
-use crate::config::{
-    async_del_list_threshold_or_default, async_expire_list_threshold_or_default,
-    cmd_linsert_length_limit_or_default, cmd_lrem_length_limit_or_default,
-};
-
-use crate::rocks::client::{get_version_for_new, RocksClient};
+use crate::rocks::client::RocksClient;
 use crate::rocks::encoding::{DataType, KeyDecoder};
 use crate::rocks::errors::{
-    REDIS_INDEX_OUT_OF_RANGE_ERR, REDIS_LIST_TOO_LARGE_ERR, REDIS_NO_SUCH_KEY_ERR,
-    REDIS_WRONG_TYPE_ERR,
+    REDIS_INDEX_OUT_OF_RANGE_ERR, REDIS_NO_SUCH_KEY_ERR, REDIS_WRONG_TYPE_ERR,
 };
 use crate::rocks::kv::bound_range::BoundRange;
 use crate::rocks::kv::key::Key;
@@ -75,7 +69,7 @@ impl<'a> ListCommand<'a> {
                         self.txn_expire_if_needed(txn, &key)?;
                         left = INIT_INDEX;
                         right = INIT_INDEX;
-                        version = get_version_for_new(
+                        version = client.get_version_for_new(
                             txn,
                             cfs.gc_cf.clone(),
                             cfs.gc_version_cf.clone(),
@@ -106,7 +100,7 @@ impl<'a> ListCommand<'a> {
                 }
                 None => {
                     // get next version available for new key
-                    let version = get_version_for_new(
+                    let version = client.get_version_for_new(
                         txn,
                         cfs.gc_cf.clone(),
                         cfs.gc_version_cf.clone(),
@@ -535,12 +529,6 @@ impl<'a> ListCommand<'a> {
                         return Ok(0);
                     }
 
-                    // check list length is not too long
-                    let limit_len = cmd_linsert_length_limit_or_default();
-                    if limit_len > 0 && right - left > limit_len as u64 {
-                        return Err(REDIS_LIST_TOO_LARGE_ERR);
-                    }
-
                     // get list items bound range
                     let bound_range = KeyEncoder::encode_list_data_key_range(&key, version);
 
@@ -669,12 +657,6 @@ impl<'a> ListCommand<'a> {
                     }
 
                     let len = right - left;
-
-                    // check list length is not too long
-                    let limit_len = cmd_lrem_length_limit_or_default();
-                    if limit_len > 0 && len > limit_len as u64 {
-                        return Err(REDIS_LIST_TOO_LARGE_ERR);
-                    }
 
                     // get list items bound range
                     let bound_range = KeyEncoder::encode_list_data_key_range(&key, version);
@@ -816,7 +798,7 @@ impl TxnCommand for ListCommand<'_> {
                 let (_, version, left, right) = KeyDecoder::decode_key_list_meta(&meta_value);
                 let len = right - left;
 
-                if len >= async_del_list_threshold_or_default() as u64 {
+                if len >= self.client.async_handle_threshold() as u64 {
                     // async delete
                     // delete meta key and create gc key and gc version key with the version
                     txn.del(cfs.meta_cf.clone(), meta_key)?;
@@ -858,7 +840,7 @@ impl TxnCommand for ListCommand<'_> {
                 }
 
                 let len = right - left;
-                if len >= async_expire_list_threshold_or_default() as u64 {
+                if len >= self.client.async_handle_threshold() as u64 {
                     // async delete
                     // delete meta key and create gc key and gc version key with the version
                     txn.del(cfs.meta_cf.clone(), meta_key)?;

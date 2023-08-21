@@ -59,7 +59,6 @@ pub const REDIS_VALUE_IS_NOT_VALID_FLOAT_ERR: RError =
     RError::String("ERR value is not a valid float");
 pub const REDIS_NO_SUCH_KEY_ERR: RError = RError::String("ERR no such key");
 pub const REDIS_INDEX_OUT_OF_RANGE_ERR: RError = RError::String("ERR index out of range");
-pub const REDIS_LIST_TOO_LARGE_ERR: RError = RError::String("ERR list is too large to execute");
 pub const DECREMENT_OVERFLOW: RError = RError::String("Decrement would overflow");
 pub const TXN_ERROR: RError = RError::Txn("Txn commit failed");
 pub const KEY_VERSION_EXHUSTED_ERR: RError = RError::String("ERR key version exhausted");

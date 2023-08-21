@@ -11,6 +11,7 @@ pub struct Unknown {
 impl Unknown {
     /// Create a new `Unknown` command which responds to unknown commands
     /// issued by clients
+    #[allow(dead_code)]
     pub(crate) fn new(key: impl ToString) -> Unknown {
         Unknown {
             command_name: key.to_string(),

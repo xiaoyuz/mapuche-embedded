@@ -12,8 +12,11 @@ pub struct DBInner {
 }
 
 impl DBInner {
-    pub(crate) async fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let client = new_client(path)?;
+    pub(crate) async fn open<P: AsRef<Path>>(
+        path: P,
+        async_deletion_enabled: bool,
+    ) -> Result<Self> {
+        let client = new_client(path, async_deletion_enabled)?;
         let client = Arc::new(client);
         Ok(Self { client })
     }

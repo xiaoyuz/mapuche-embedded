@@ -166,6 +166,9 @@ pub use zremrangebyscore::Zremrangebyscore;
 mod keys;
 pub use keys::Keys;
 
+mod dogc;
+pub use dogc::Gc;
+
 use crate::config::txn_retry_count;
 use crate::db::DBInner;
 use crate::Frame;
@@ -251,6 +254,8 @@ pub enum Command {
     Zrank(Zrank),
     Zincrby(Zincrby),
 
+    Gc(Gc),
+
     Unknown(Unknown),
 }
 
@@ -326,6 +331,8 @@ impl Command {
             Zpopmax(cmd) => cmd.execute(client, false).await,
             Zrank(cmd) => cmd.execute(client).await,
             Zincrby(cmd) => cmd.execute(client).await,
+
+            Gc(cmd) => cmd.execute(client).await,
 
             Unknown(cmd) => cmd.apply().await,
         }?;

@@ -3,15 +3,18 @@ pub mod frame;
 
 mod config;
 mod db;
-mod gc;
 mod rocks;
 mod utils;
 
-use cmd::Command;
+use cmd::{Command, Gc};
 
 use db::DBInner;
 use frame::Frame;
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, time::Duration};
+use tokio::{
+    spawn,
+    time::{interval, MissedTickBehavior},
+};
 
 /// Error returned by most functions.
 ///
@@ -31,15 +34,29 @@ pub type Error = Box<dyn std::error::Error + Send + Sync>;
 /// This is defined as a convenience.
 pub type Result<T> = anyhow::Result<T, Error>;
 
-pub struct OpenOptions {}
+#[derive(Clone)]
+pub struct OpenOptions {
+    pub(crate) gc_enabled: bool,
+    pub(crate) gc_interval: u64,
+}
 
 impl OpenOptions {
     pub fn new() -> Self {
-        OpenOptions {}
+        Self::default()
+    }
+
+    pub fn gc_enable(mut self, value: bool) -> Self {
+        self.gc_enabled = value;
+        self
+    }
+
+    pub fn gc_interval(mut self, value: u64) -> Self {
+        self.gc_interval = value;
+        self
     }
 
     pub async fn open<P: AsRef<Path>>(self, path: P) -> Result<DB> {
-        let inner = DBInner::open(path).await?;
+        let inner = DBInner::open(path, self.gc_enabled).await?;
         let inner = Arc::new(inner);
         Ok(DB { inner })
     }
@@ -47,7 +64,10 @@ impl OpenOptions {
 
 impl Default for OpenOptions {
     fn default() -> Self {
-        Self::new()
+        Self {
+            gc_enabled: false,
+            gc_interval: u64::MAX,
+        }
     }
 }
 
@@ -57,8 +77,27 @@ pub struct DB {
 }
 
 impl DB {
-    pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        OpenOptions::new().open(path).await
+    pub async fn open<P: AsRef<Path>>(
+        path: P,
+        async_deletion_enabled: bool,
+        gc_interval: u64,
+    ) -> Result<Self> {
+        let db = OpenOptions::new().open(path).await?;
+        let cloned = db.clone();
+        if async_deletion_enabled {
+            spawn(async move {
+                let mut interval = interval(Duration::from_millis(gc_interval));
+                interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+                loop {
+                    interval.tick().await;
+                    let conn = cloned.conn();
+                    let cmd = Command::Gc(Gc::new());
+                    let _ = conn.execute(cmd).await;
+                }
+            });
+        }
+
+        Ok(db)
     }
 
     pub fn conn(&self) -> Conn {

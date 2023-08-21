@@ -1,8 +1,5 @@
-use crate::config::{
-    async_del_hash_threshold_or_default, async_expire_hash_threshold_or_default,
-    config_meta_key_number_or_default,
-};
-use crate::rocks::client::{get_version_for_new, RocksClient};
+use crate::config::config_meta_key_number_or_default;
+use crate::rocks::client::RocksClient;
 use crate::rocks::encoding::{DataType, KeyDecoder};
 use crate::rocks::errors::{REDIS_VALUE_IS_NOT_INTEGER_ERR, REDIS_WRONG_TYPE_ERR};
 use crate::rocks::kv::bound_range::BoundRange;
@@ -91,7 +88,7 @@ impl<'a> HashCommand<'a> {
                     if key_is_expired(ttl) {
                         self.txn_expire_if_needed(txn, &key)?;
                         expired = true;
-                        version = get_version_for_new(
+                        version = client.get_version_for_new(
                             txn,
                             cfs.gc_cf.clone(),
                             cfs.gc_version_cf.clone(),
@@ -159,7 +156,7 @@ impl<'a> HashCommand<'a> {
                     }
                 }
                 None => {
-                    let version = get_version_for_new(
+                    let version = client.get_version_for_new(
                         txn,
                         cfs.gc_cf.clone(),
                         cfs.gc_version_cf.clone(),
@@ -564,7 +561,7 @@ impl<'a> HashCommand<'a> {
                     if key_is_expired(ttl) {
                         self.txn_expire_if_needed(txn, &key)?;
                         expired = true;
-                        version = get_version_for_new(
+                        version = client.get_version_for_new(
                             txn,
                             cfs.gc_cf.clone(),
                             cfs.gc_version_cf.clone(),
@@ -618,7 +615,7 @@ impl<'a> HashCommand<'a> {
                     }
                 }
                 None => {
-                    let version = get_version_for_new(
+                    let version = client.get_version_for_new(
                         txn,
                         cfs.gc_cf.clone(),
                         cfs.gc_version_cf.clone(),
@@ -696,7 +693,7 @@ impl TxnCommand for HashCommand<'_> {
                 let (_, version, _) = KeyDecoder::decode_key_meta(&meta_value);
                 let meta_size = self.sum_key_size(&key, version)?;
 
-                if meta_size > async_del_hash_threshold_or_default() as i64 {
+                if meta_size > self.client.async_handle_threshold() as i64 {
                     // do async del
                     txn.del(cfs.meta_cf.clone(), meta_key)?;
 
@@ -746,7 +743,7 @@ impl TxnCommand for HashCommand<'_> {
                 }
                 let meta_size = self.sum_key_size(&key, version)?;
 
-                if meta_size > async_expire_hash_threshold_or_default() as i64 {
+                if meta_size > self.client.async_handle_threshold() as i64 {
                     // do async del
                     txn.del(cfs.meta_cf.clone(), meta_key)?;
 
