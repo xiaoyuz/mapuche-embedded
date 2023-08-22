@@ -17,16 +17,6 @@ use tokio::{
 };
 
 /// Error returned by most functions.
-///
-/// When writing a real application, one might want to consider a specialized
-/// error handling crate or defining an error type as an `enum` of causes.
-/// However, for our example, using a boxed `std::error::Error` is sufficient.
-///
-/// For performance reasons, boxing is avoided in any hot path. For example, in
-/// `parse`, a custom error `enum` is defined. This is because the error is hit
-/// and handled during normal execution when a partial frame is received on a
-/// socket. `std::error::Error` is implemented for `parse::Error` which allows
-/// it to be converted to `Box<dyn std::error::Error>`.
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
 /// A specialized `Result` type for mapuche operations.
@@ -34,6 +24,9 @@ pub type Error = Box<dyn std::error::Error + Send + Sync>;
 /// This is defined as a convenience.
 pub type Result<T> = anyhow::Result<T, Error>;
 
+/// Options to open the DB.
+///
+/// Mostly about gc maters.
 #[derive(Clone)]
 pub struct OpenOptions {
     pub(crate) gc_enabled: bool,
@@ -45,16 +38,20 @@ impl OpenOptions {
         Self::default()
     }
 
+    /// Set if enable gc. Default is false.
     pub fn gc_enable(mut self, value: bool) -> Self {
         self.gc_enabled = value;
         self
     }
 
+    /// Set the interval of gc. Default is 10s.
     pub fn gc_interval(mut self, value: u64) -> Self {
         self.gc_interval = value;
         self
     }
 
+    /// Open the db with a given path.
+    /// It will create or open the fold in path which provide rocksdb storage.
     pub async fn open<P: AsRef<Path>>(self, path: P) -> Result<DB> {
         let inner = DBInner::open(path, self.gc_enabled).await?;
         let inner = Arc::new(inner);

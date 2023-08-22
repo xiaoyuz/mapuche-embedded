@@ -7,7 +7,7 @@ use crate::{
     Result,
 };
 
-pub struct DBInner {
+pub(crate) struct DBInner {
     pub(crate) client: Arc<RocksClient>,
 }
 

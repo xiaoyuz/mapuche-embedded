@@ -1,12 +1,13 @@
 [package]
-authors = ["xiaoyuz <xiaoyuz@opera.com>"]
-name = "mapuche"
+authors = ["xiaoyuz <alexanderxiaoyu@gmail.com>"]
+name = "mapuche-embedded"
 version = "0.1.0"
 edition = "2021"
 readme = "README.md"
 description = """
-An implementation of a Redis protocol server, with RocksDB as KV storage.
+An implementation of a Redis protocol embedded db, with RocksDB as KV storage.
 """
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 async-stream = "0.3.0"
