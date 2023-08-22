@@ -1,6 +1,6 @@
 use std::{thread, time::Duration};
 
-use mapuche::{
+use mapuche_embedded::{
     cmd::{Command, Get, Lrange, Lrem, Push, Set, Zadd, Zcard, Zrange, Zrem},
     OpenOptions,
 };
